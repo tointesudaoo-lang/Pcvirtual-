@@ -1,0 +1,222 @@
+name: PC Virtual Windows - KZ
+
+on:
+  workflow_dispatch:
+
+jobs:
+  windows-pc:
+    runs-on: windows-latest
+    timeout-minutes: 350
+
+    steps:
+
+      # ==============================
+      # 1. CONFIGURAÇÃO DO WINDOWS
+      # ==============================
+      - name: Configurar Windows
+        shell: powershell
+        run: |
+          Write-Host "Configurando PC virtual..."
+
+          # Ativar Remote Desktop
+          Set-ItemProperty `
+            -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" `
+            -Name "fDenyTSConnections" `
+            -Value 0
+
+          # Permitir conexões RDP
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+
+          # Habilitar Network Level Authentication
+          Set-ItemProperty `
+            -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" `
+            -Name "UserAuthentication" `
+            -Value 1
+
+          Write-Host "RDP configurado."
+
+      # ==============================
+      # 2. CRIAR USUÁRIO RDP
+      # ==============================
+      - name: Criar usuário do PC
+        shell: powershell
+        run: |
+          $Username = "KZPC"
+          $Password = "KzPC@2026!Virtual"
+
+          $SecurePassword = ConvertTo-SecureString `
+            $Password `
+            -AsPlainText `
+            -Force
+
+          if (-not (Get-LocalUser -Name $Username -ErrorAction SilentlyContinue)) {
+              New-LocalUser `
+                -Name $Username `
+                -Password $SecurePassword `
+                -FullName "KZ Virtual PC" `
+                -Description "Usuário do PC virtual"
+          }
+
+          Add-LocalGroupMember `
+            -Group "Administrators" `
+            -Member $Username `
+            -ErrorAction SilentlyContinue
+
+          Add-LocalGroupMember `
+            -Group "Remote Desktop Users" `
+            -Member $Username `
+            -ErrorAction SilentlyContinue
+
+          Write-Host "Usuário criado:"
+          Write-Host "Usuário: $Username"
+          Write-Host "Senha: $Password"
+
+      # ==============================
+      # 3. INSTALAR TAILSCALE
+      # ==============================
+      - name: Instalar Tailscale
+        shell: powershell
+        run: |
+          Write-Host "Baixando Tailscale..."
+
+          $url = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
+          $installer = "$env:TEMP\tailscale.msi"
+
+          Invoke-WebRequest `
+            -Uri $url `
+            -OutFile $installer
+
+          Start-Process `
+            msiexec.exe `
+            -ArgumentList "/i `"$installer`" /quiet /norestart" `
+            -Wait
+
+          Write-Host "Tailscale instalado."
+
+      # ==============================
+      # 4. CONECTAR TAILSCALE
+      # ==============================
+      - name: Conectar Tailscale
+        shell: powershell
+        env:
+          TS_AUTHKEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
+        run: |
+          $tailscale = "C:\Program Files\Tailscale\tailscale.exe"
+
+          if (!(Test-Path $tailscale)) {
+              Write-Host "Tailscale não encontrado."
+              exit 1
+          }
+
+          & $tailscale up `
+            --authkey="$env:TS_AUTHKEY" `
+            --hostname="KZ-Virtual-PC"
+
+          Start-Sleep -Seconds 10
+
+          Write-Host ""
+          Write-Host "===== TAILSCALE ====="
+
+          & $tailscale status
+
+          Write-Host ""
+          Write-Host "===== IP TAILSCALE ====="
+
+          & $tailscale ip -4
+
+      # ==============================
+      # 5. INSTALAR PROGRAMAS BÁSICOS
+      # ==============================
+      - name: Instalar programas
+        shell: powershell
+        run: |
+          Write-Host "Instalando programas..."
+
+          winget install `
+            --id 7zip.7zip `
+            --silent `
+            --accept-package-agreements `
+            --accept-source-agreements `
+            --disable-interactivity `
+            -e
+
+          Write-Host "Programas instalados."
+
+      # ==============================
+      # 6. MOSTRAR INFORMAÇÕES DO PC
+      # ==============================
+      - name: Mostrar informações
+        shell: powershell
+        run: |
+          Write-Host ""
+          Write-Host "================================"
+          Write-Host "       KZ VIRTUAL PC"
+          Write-Host "================================"
+          Write-Host ""
+
+          Write-Host "Computador:"
+          Get-CimInstance Win32_ComputerSystem |
+            Select-Object Manufacturer, Model, TotalPhysicalMemory
+
+          Write-Host ""
+          Write-Host "Processador:"
+          Get-CimInstance Win32_Processor |
+            Select-Object Name, NumberOfCores, NumberOfLogicalProcessors
+
+          Write-Host ""
+          Write-Host "Memória:"
+          Get-CimInstance Win32_OperatingSystem |
+            Select-Object `
+              @{Name="RAM_GB";Expression={[math]::Round($_.TotalVisibleMemorySize/1MB,2)}}
+
+          Write-Host ""
+          Write-Host "Disco:"
+          Get-PSDrive C |
+            Select-Object `
+              @{Name="Total_GB";Expression={[math]::Round(($_.Used + $_.Free)/1GB,2)}},
+              @{Name="Livre_GB";Expression={[math]::Round($_.Free/1GB,2)}}
+
+      # ==============================
+      # 7. MOSTRAR IP DO TAILSCALE
+      # ==============================
+      - name: Mostrar IP para Windows App
+        shell: powershell
+        run: |
+          $tailscale = "C:\Program Files\Tailscale\tailscale.exe"
+
+          Write-Host ""
+          Write-Host "======================================"
+          Write-Host "      DADOS PARA WINDOWS APP"
+          Write-Host "======================================"
+          Write-Host ""
+
+          Write-Host "IP Tailscale:"
+          & $tailscale ip -4
+
+          Write-Host ""
+          Write-Host "Usuário: KZPC"
+          Write-Host "Senha: KzPC@2026!Virtual"
+
+          Write-Host ""
+          Write-Host "No Windows App use o IP acima."
+          Write-Host "======================================"
+
+      # ==============================
+      # 8. MANTER O PC RODANDO
+      # ==============================
+      - name: Manter PC virtual ligado
+        shell: powershell
+        run: |
+          Write-Host ""
+          Write-Host "======================================"
+          Write-Host "       PC VIRTUAL ESTÁ ONLINE"
+          Write-Host "======================================"
+          Write-Host ""
+
+          while ($true) {
+              $time = Get-Date -Format "HH:mm:ss"
+
+              Write-Host "PC online - $time"
+
+              Start-Sleep -Seconds 60
+          }
